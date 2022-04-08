@@ -1,0 +1,189 @@
+DECLARE
+  ROW_ NUMBER;
+BEGIN
+  SELECT count(*) INTO ROW_ FROM user_tables 
+    WHERE TABLE_NAME = 'GAMEON';
+  IF ROW_ = 0 THEN
+    EXECUTE IMMEDIATE 'CREATE TABLE GAMEON(
+      SI NUMBER,
+      ROW_1 CHAR,
+      ROW_2 CHAR,
+      ROW_3 CHAR
+    )';
+ END IF;
+END;
+/
+
+CREATE OR REPLACE FUNCTION ALPHATOCOLNAM(nr IN NUMBER)
+RETURN CHAR
+IS
+BEGIN
+  IF nr=1 THEN
+    RETURN 'ROW_1';
+  ELSIF nr=2 THEN
+    RETURN 'ROW_2';
+  ELSIF nr=3 THEN
+    RETURN 'ROW_3';
+  ELSE 
+    RETURN '_';
+  END IF;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE show_match IS
+BEGIN
+  dbms_output.enable(10000);
+  dbms_output.put_line(' ');
+  FOR ll in (SELECT * FROM GAMEON ORDER BY SI) LOOP
+    dbms_output.put_line('     ' || ll.ROW_1 || ' ' || ll.ROW_2 || ' ' || ll.ROW_3);
+  END LOOP; 
+  dbms_output.put_line(' ');
+END;
+/
+
+CREATE OR REPLACE PROCEDURE restart_match IS
+ii NUMBER;
+BEGIN
+  DELETE FROM GAMEON;
+  FOR ii in 1..3 LOOP
+    INSERT INTO GAMEON VALUES (ii,'_','_','_');
+  END LOOP; 
+  dbms_output.enable(10000);
+  show_match();
+  dbms_output.put_line('game ready : EXECUTE play(''X'', x, y);');
+END;
+/
+
+CREATE OR REPLACE PROCEDURE play(marker IN VARCHAR2, attno IN NUMBER, seq IN NUMBER) IS
+val GAMEON.ROW_1%type;
+colo CHAR(20);
+marker2 CHAR(20);
+BEGIN
+  SELECT ALPHATOCOLNAM(attno) INTO colo FROM DUAL;
+  EXECUTE IMMEDIATE ('SELECT ' || colo || ' FROM GAMEON WHERE SI=' || seq) INTO val;
+  IF val='_' THEN
+    EXECUTE IMMEDIATE ('UPDATE GAMEON SET ' || colo || '=''' || marker || ''' WHERE SI=' || seq);
+    IF marker='X' THEN
+      marker2:='O';
+    ELSE
+      marker2:='X';
+    END IF;
+    show_match();
+    dbms_output.put_line('Around ' || marker2 || '. to move : EXECUTE play(''' || marker2 || ''', x, y);');
+  ELSE
+    dbms_output.enable(10000);
+    dbms_output.put_line('use the next available space');
+  END IF;
+END;
+/
+
+CREATE OR REPLACE PROCEDURE champion(marker IN VARCHAR2) IS
+BEGIN
+  dbms_output.enable(10000);
+  show_match();
+  dbms_output.put_line('the player' || marker || 'won!!'); 
+  dbms_output.put_line('---------------------------------------');
+  dbms_output.put_line('start next game');
+  restart_match();
+END;
+/
+
+CREATE OR REPLACE FUNCTION champcol_demand(alpcol IN VARCHAR2, marker IN VARCHAR2)
+RETURN VARCHAR2
+IS
+BEGIN
+  RETURN ('SELECT COUNT(*) FROM GAMEON WHERE ' || alpcol || ' = '''|| marker ||''' AND ' || alpcol || ' != ''_''');
+END;
+/
+
+CREATE OR REPLACE FUNCTION champdiag_demand(alpcol IN VARCHAR2, sivalue IN NUMBER)
+RETURN VARCHAR2
+IS
+BEGIN
+  RETURN ('SELECT '|| alpcol ||' FROM GAMEON WHERE SI=' || sivalue);
+END;
+/
+
+CREATE OR REPLACE FUNCTION champcol(alpcol IN VARCHAR2)
+RETURN CHAR
+IS
+  cwin NUMBER;
+  r VARCHAR2(100);
+BEGIN
+  SELECT champcol_demand(alpcol, 'X') into r FROM DUAL;
+  EXECUTE IMMEDIATE r INTO cwin;
+  IF cwin=3 THEN
+    RETURN 'X';
+  ELSIF cwin=0 THEN
+    SELECT champcol_demand(alpcol, 'O') into r FROM DUAL;
+    EXECUTE IMMEDIATE r INTO cwin;
+    IF cwin=3 THEN
+      RETURN 'O';
+    END IF;
+  END IF;
+  RETURN '_';
+END;
+/
+
+CREATE OR REPLACE FUNCTION champdiag(arbx IN CHAR, nucln IN NUMBER, nuseq IN NUMBER)
+RETURN CHAR
+IS
+  arbvar CHAR;
+  arbxvar CHAR;
+  r VARCHAR2(56);
+BEGIN
+  SELECT champdiag_demand(ALPHATOCOLNAM(nucln), nuseq) INTO r FROM DUAL;
+  IF arbx IS NULL THEN
+    EXECUTE IMMEDIATE (r) INTO arbxvar;
+  ELSIF NOT arbx = '_' THEN
+    EXECUTE IMMEDIATE (r) INTO arbvar;
+    IF NOT arbx = arbvar THEN
+      arbxvar := '_';
+    END IF;
+  ELSE
+    arbxvar := '_';
+  END IF;
+  RETURN arbxvar;
+END;
+/
+
+CREATE OR REPLACE TRIGGER ischampion
+AFTER UPDATE ON GAMEON
+DECLARE
+  CURSOR cr_seq IS 
+    SELECT * FROM GAMEON ORDER BY SI; 
+  crlv GAMEON%rowtype;
+  arbvar CHAR;
+  arbx1 CHAR;
+  arbx2 CHAR;
+  r VARCHAR2(40);
+BEGIN
+  FOR crlv IN cr_seq LOOP
+    IF crlv.ROW_1 = crlv.ROW_2 AND crlv.ROW_2= crlv.ROW_3 AND NOT crlv.ROW_1='_' THEN
+      champion(crlv.ROW_1);
+      EXIT;
+    END IF;
+    SELECT champcol(ALPHATOCOLNAM(crlv.SI)) INTO arbvar FROM DUAL;
+    IF NOT arbvar = '_' THEN
+      champion(arbvar);
+      EXIT;
+    END IF;
+    SELECT champdiag(arbx1, crlv.SI, crlv.SI) INTO arbx1 FROM dual;
+    SELECT champdiag(arbx2, 4-crlv.SI, crlv.SI) INTO arbx2 FROM dual;
+  END LOOP;
+  IF NOT arbx1 = '_' THEN
+    champion(arbx1);
+  END IF;
+  IF NOT arbx2 = '_' THEN
+    champion(arbx2);
+  END IF;
+END;
+/
+
+EXECUTE restart_match;
+EXECUTE play('X', 1, 3);
+EXECUTE play('O', 2, 1);
+EXECUTE play('X', 2, 2);
+EXECUTE play('O', 2, 3);
+EXECUTE play('X', 3, 1);
+
